@@ -51,5 +51,3 @@ Third-party tiles, imagery, and map data remain subject to their providers' term
 ## Repository status
 
 This is a standalone front-end source snapshot prepared for an independent raster-WebGIS portfolio repository. It is separate from the earlier polygon-based WebGIS repository. Static source review does not substitute for browser, accessibility, performance or live-service testing.
-
-**Preparing or downloading this source does not publish it to GitHub or deploy it to production.**
