@@ -109,7 +109,8 @@ Third-party libraries, satellite products and basemap services remain subject to
 ## Project and authorship
 
 **Mehdi Ghazanfari**  
-Senior GIS Analyst | Spatial Data • Analysis • GIS Systems | Infrastructure • Environment • Decision Support
+Senior GIS Analyst | Spatial Data • Analysis • GIS Systems | Infrastructure • Environment • Decision Support.
+
 This is an independent technical portfolio project illustrating an end-to-end geospatial delivery approach, from remote-sensing analysis to a browser-accessible raster map. The GitHub repository is a **snapshot of the presentation layer**, separate from the live deployment and the earlier polygon-based WebGIS work.
 
 **Licence:** No open-source licence has been granted for the repository's original code at this time. Public visibility on GitHub does not itself grant permission to reuse, modify or redistribute it.
