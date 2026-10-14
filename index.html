@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>South Australia | September 2026 ΔMCI</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  #map { background: #174b71; }
+  .info { background: rgba(255,255,255,.96); padding: 11px 13px; border-radius: 6px;
+    box-shadow: 0 1px 10px #0004; font: 13px/1.5 Arial,sans-serif; max-width: 270px; }
+  .info img { display:block; max-width:245px; max-height:230px; margin: 7px 0; }
+  .info small { color:#444; }
+  #status { position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    z-index:1001; background:rgba(255,255,255,.97); color:#333;
+    font:13px/1.4 Arial,sans-serif; padding:9px 13px; border-radius:6px;
+    box-shadow:0 1px 8px #0004; max-width:calc(100% - 100px);
+    text-align:center; }
+  #status.error { color:#a00; border:1px solid #d88; }
+  #status button { margin-left:9px; padding:3px 8px; cursor:pointer; }
+  #status[hidden], #retry[hidden] { display:none !important; }
+  /* Responsive interface controls only: preserve raster rendering and WMS logic. */
+  @media (max-width: 900px) {
+    /* Keep the scale bar above the (potentially multi-line) attribution text. */
+    .leaflet-bottom.leaflet-left { bottom: var(--mobile-attribution-height, 44px); }
+    .leaflet-control-attribution { max-width: calc(100vw - 12px); box-sizing: border-box; }
+    /* Hide loading counts on phones/tablets, but retain error and Retry visibility. */
+    #status:not(.error) { display: none !important; }
+  }
+  /* Mobile/tablet legend display only; no raster, WMS or map changes. */
+  .legend-toggle { display: none; }
+  @media (max-width: 900px) {
+    .info.legend-responsive { width: auto !important; max-width: min(300px, calc(100vw - 36px)) !important; padding: 8px 10px; box-sizing: border-box; }
+    .legend-toggle { display: block; width: 100%; border: 0; background: transparent; text-align: left;
+      padding: 3px 5px; cursor: pointer; color: #222; font: bold 14px/1.5 Arial,sans-serif; }
+    .legend-content { display: none; }
+    .legend-responsive.legend-open .legend-content { display: block; max-height: min(48vh, 350px); overflow-y: auto;
+      overflow-x: hidden; overscroll-behavior: contain; margin-top: 6px; width: min(268px, calc(100vw - 58px)); }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="status" role="status" aria-live="polite">
+  <span id="statusText">Connecting to September 2026 ΔMCI WMS…</span>
+  <button id="retry" type="button" hidden>Retry this view</button>
+</div>
+<script>
+'use strict';
+/*
+  Portfolio presentation of the September 2026 Delta MCI WebGIS viewer.
+  Leaflet: https://leafletjs.com/reference.html
+  GeoServer WMS: https://docs.geoserver.org/latest/en/user/services/wms/reference/
+  The publicly accessible WMS is an external runtime dependency.
+*/
+const WMS_URL = 'https://map.gistrategix.com.au/algalbloom/wms';
+const RASTER_LAYER = 'algalbloom:DeltaMCI_Sep_2026_WebGIS_Compressed';
+const RASTER_STYLE = 'deltamci_vik_2026';
+
+// Limit concurrent requests initiated by this WMS layer in the browser.
+// This does not configure or limit GeoServer itself.
+const MAX_CONCURRENT_WMS = 3;
+
+const map = L.map('map'); // Leaflet 1.9.4 default EPSG:3857, unchanged.
+map.fitBounds([[-36.3, 136.0], [-32.0, 139.9]]);
+
+const satellite = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { attribution: 'Tiles &copy; Esri and its data providers', maxZoom: 19 }
+).addTo(map);
+
+// Leaflet has no documented per-WMS-layer concurrency option in 1.9.4.
+// Queue only this WMS layer's image requests; its built-in URL/grid calculation
+// remains untouched, including GetMap BBOX and WMS output CRS.
+const LimitedWMS = L.TileLayer.WMS.extend({
+  initialize: function(url, options) {
+    L.TileLayer.WMS.prototype.initialize.call(this, url, options);
+    this._requestQueue = [];
+    this._requestByTile = new Map();
+    this._activeRequests = 0;
+    this.on('tileunload tileabort', function(event) {
+      this._cancelRequest(event.tile);
+    }, this);
+    this.on('remove', function() { this._cancelAllRequests(); }, this);
+  },
+
+  createTile: function(coords, done) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.setAttribute('role', 'presentation');
+    const request = { img, coords, done, started:false, finished:false };
+    this._requestByTile.set(img, request);
+    this._requestQueue.push(request);
+    this._drainRequestQueue();
+    return img;
+  },
+
+  _drainRequestQueue: function() {
+    while (this._activeRequests < MAX_CONCURRENT_WMS && this._requestQueue.length) {
+      const request = this._requestQueue.shift();
+      if (request.finished) continue;
+      request.started = true;
+      this._activeRequests++;
+      request.img.onload = () => this._finishRequest(request, null);
+      request.img.onerror = () => this._finishRequest(request, new Error('WMS image load failed'));
+      request.img.src = this.getTileUrl(request.coords);
+    }
+  },
+
+  _finishRequest: function(request, error) {
+    if (request.finished) return;
+    request.finished = true;
+    this._activeRequests = Math.max(0, this._activeRequests - 1);
+    this._requestByTile.delete(request.img);
+    request.img.onload = null;
+    request.img.onerror = null;
+    request.done(error, request.img); // Preserve Leaflet tileload / tileerror semantics.
+    this._drainRequestQueue();
+  },
+
+  _cancelRequest: function(img) {
+    const request = this._requestByTile.get(img);
+    if (!request || request.finished) return;
+    request.finished = true;
+    this._requestByTile.delete(img);
+    if (request.started) {
+      img.onload = null;
+      img.onerror = null;
+      img.src = L.Util.emptyImageUrl; // Cancel an obsolete browser image fetch.
+      this._activeRequests = Math.max(0, this._activeRequests - 1);
+    } else {
+      const index = this._requestQueue.indexOf(request);
+      if (index !== -1) this._requestQueue.splice(index, 1);
+    }
+    // Leaflet has unloaded/aborted the tile: do not invoke done() for stale work.
+    this._drainRequestQueue();
+  },
+
+  _cancelAllRequests: function() {
+    // Empty queued work first, so cancelling active requests cannot start more.
+    this._requestQueue.length = 0;
+    for (const img of Array.from(this._requestByTile.keys())) {
+      this._cancelRequest(img);
+    }
+  }
+});
+
+const raster = new LimitedWMS(WMS_URL, {
+  layers: RASTER_LAYER,
+  styles: RASTER_STYLE,
+  format: 'image/png',
+  transparent: true,
+  version: '1.1.1',
+  opacity: 1,
+  tileSize: 256,              // Same default Leaflet tile grid as the original.
+  updateWhenIdle: true,      // Defer new tile requests until a pan is finished.
+  updateWhenZooming: false,  // Defer updates during smooth zoom animation.
+  keepBuffer: 2,             // Keep default buffer: avoid needless re-requests.
+  attribution: 'September 2026 Sentinel-2 ΔMCI · 2019–2023 September baseline'
+});
+
+L.control.scale({position:'bottomleft',metric:true,imperial:false}).addTo(map);
+const compactScreen = window.matchMedia('(max-width: 900px)');
+const layerControl = L.control.layers({'Esri Satellite':satellite}, {'September 2026 ΔMCI (vik)':raster},
+  {position:'topright',collapsed:compactScreen.matches}).addTo(map);
+
+// On touch screens, Leaflet's default toggle opens the layer list but does not
+// always close it when tapped a second time. Make the same icon a true toggle.
+const layerToggle = layerControl.getContainer().querySelector('.leaflet-control-layers-toggle');
+if (layerToggle) {
+  layerToggle.addEventListener('click', function(event) {
+    if (!compactScreen.matches) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (layerControl.getContainer().classList.contains('leaflet-control-layers-expanded')) {
+      layerControl.collapse();
+    } else {
+      layerControl.expand();
+    }
+  }, true);
+}
+// Close the expanded list by tapping anywhere outside it, including other controls.
+document.addEventListener('pointerdown', function(event) {
+  if (compactScreen.matches && !layerControl.getContainer().contains(event.target)) {
+    layerControl.collapse();
+  }
+}, {passive: true});
+
+// The attribution can wrap to two or more lines on phones. Measure its actual
+// height so the scale bar is never hidden behind its text; keep desktop intact.
+const attributionElement = map.attributionControl.getContainer();
+function placeScaleAboveAttribution() {
+  const h = Math.ceil(attributionElement.getBoundingClientRect().height);
+  document.documentElement.style.setProperty('--mobile-attribution-height', `${h + 9}px`);
+}
+if ('ResizeObserver' in window) {
+  new ResizeObserver(placeScaleAboveAttribution).observe(attributionElement);
+}
+window.addEventListener('resize', placeScaleAboveAttribution, {passive:true});
+placeScaleAboveAttribution();
+
+const legend = L.control({ position:'bottomright' });
+legend.onAdd = function() {
+  const div = L.DomUtil.create('div','info legend-responsive');
+  div.style.width = '268px';
+  div.style.maxWidth = 'calc(100vw - 35px)';
+  div.style.boxSizing = 'border-box';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'legend-toggle';
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.textContent = 'Legend ▾';
+  toggle.addEventListener('click', function() {
+    const open = div.classList.toggle('legend-open');
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.textContent = open ? 'Legend ▴' : 'Legend ▾';
+  });
+  L.DomEvent.disableClickPropagation(div);
+  L.DomEvent.disableScrollPropagation(div);
+  const content = document.createElement('div');
+  content.className = 'legend-content';
+
+  const title = document.createElement('strong');
+  title.textContent = 'September 2026 ΔMCI (vik)';
+
+  // Colour stops matching the deployed deltamci_vik_2026 style.
+  // Legend only: the GeoServer WMS rendering and scientific values are unchanged.
+  const bar = document.createElement('div');
+  bar.setAttribute('role','img');
+  bar.setAttribute('aria-label','ΔMCI vik colour scale: blue negative, neutral zero, red positive');
+  bar.style.cssText = 'height:20px;width:100%;border:1px solid #777;border-radius:3px;box-sizing:border-box;margin:10px 0 5px;';
+  bar.style.background = 'linear-gradient(to right, #001261 0.0000%, #011462 0.3922%, #011563 0.7843%, #011764 1.1765%, #011865 1.5686%, #011A66 1.9608%, #021C67 2.3529%, #021D68 2.7451%, #021F69 3.1373%, #02206A 3.5294%, #02226B 3.9216%, #02236C 4.3137%, #02256D 4.7059%, #02276E 5.0980%, #02286F 5.4902%, #022A70 5.8824%, #022B71 6.2745%, #022D72 6.6667%, #022E73 7.0588%, #023074 7.4510%, #023175 7.8431%, #023376 8.2353%, #023477 8.6275%, #023678 9.0196%, #023779 9.4118%, #02397A 9.8039%, #023A7B 10.1961%, #033C7C 10.5882%, #033E7D 10.9804%, #033F7E 11.3725%, #03417F 11.7647%, #034280 12.1569%, #034481 12.5490%, #034582 12.9412%, #034783 13.3333%, #034984 13.7255%, #034A85 14.1176%, #044C86 14.5098%, #044D87 14.9020%, #044F88 15.2941%, #055189 15.6863%, #05528A 16.0784%, #06548B 16.4706%, #06568C 16.8627%, #07578D 17.2549%, #08598F 17.6471%, #095B90 18.0392%, #0B5D91 18.4314%, #0C5E92 18.8235%, #0E6093 19.2157%, #106294 19.6078%, #116496 20.0000%, #136697 20.3922%, #156798 20.7843%, #176999 21.1765%, #196B9A 21.5686%, #1C6D9C 21.9608%, #1E6F9D 22.3529%, #20719E 22.7451%, #2373A0 23.1373%, #2575A1 23.5294%, #2877A2 23.9216%, #2B79A4 24.3137%, #2D7BA5 24.7059%, #307DA6 25.0980%, #337FA8 25.4902%, #3681A9 25.8824%, #3983AB 26.2745%, #3C85AC 26.6667%, #3F87AD 27.0588%, #4289AF 27.4510%, #458BB0 27.8431%, #488DB2 28.2353%, #4B90B3 28.6275%, #4E92B4 29.0196%, #5194B6 29.4118%, #5496B7 29.8039%, #5798B9 30.1961%, #5A9ABA 30.5882%, #5D9CBB 30.9804%, #619EBD 31.3725%, #64A0BE 31.7647%, #67A2C0 32.1569%, #6AA4C1 32.5490%, #6DA6C2 32.9412%, #71A8C4 33.3333%, #74AAC5 33.7255%, #77ACC6 34.1176%, #7AAEC8 34.5098%, #7DB0C9 34.9020%, #80B2CA 35.2941%, #84B4CC 35.6863%, #87B6CD 36.0784%, #8AB8CE 36.4706%, #8DBAD0 36.8627%, #90BCD1 37.2549%, #94BED2 37.6471%, #97C0D4 38.0392%, #9AC2D5 38.4314%, #9DC4D6 38.8235%, #A0C5D8 39.2157%, #A3C7D9 39.6078%, #A7C9DA 40.0000%, #AACBDC 40.3922%, #ADCDDD 40.7843%, #B0CFDE 41.1765%, #B3D1DF 41.5686%, #B6D3E1 41.9608%, #BAD5E2 42.3529%, #BDD6E3 42.7451%, #C0D8E4 43.1373%, #C3DAE5 43.5294%, #C6DBE6 43.9216%, #C9DDE7 44.3137%, #CCDFE8 44.7059%, #CFE0E8 45.0980%, #D2E1E9 45.4902%, #D5E3E9 45.8824%, #D8E4E9 46.2745%, #DBE5E9 46.6667%, #DEE6E9 47.0588%, #E0E6E9 47.4510%, #E2E7E8 47.8431%, #E5E7E8 48.2353%, #E7E7E7 48.6275%, #E8E7E5 49.0196%, #EAE6E4 49.4118%, #EBE6E2 49.8039%, #ECE5E0 50.1961%, #EDE4DE 50.5882%, #EEE3DC 50.9804%, #EEE1DA 51.3725%, #EEE0D8 51.7647%, #EEDED5 52.1569%, #EEDDD3 52.5490%, #EEDBD0 52.9412%, #EED9CD 53.3333%, #EDD7CB 53.7255%, #EDD5C8 54.1176%, #ECD3C5 54.5098%, #ECD1C3 54.9020%, #EBD0C0 55.2941%, #EACEBD 55.6863%, #E9CCBA 56.0784%, #E9CAB8 56.4706%, #E8C8B5 56.8627%, #E7C6B2 57.2549%, #E6C4B0 57.6471%, #E5C1AD 58.0392%, #E4BFAA 58.4314%, #E4BEA8 58.8235%, #E3BCA5 59.2157%, #E2BAA2 59.6078%, #E1B8A0 60.0000%, #E0B69D 60.3922%, #DFB49A 60.7843%, #DFB298 61.1765%, #DEB095 61.5686%, #DDAE93 61.9608%, #DCAC90 62.3529%, #DBAA8D 62.7451%, #DBA88B 63.1373%, #DAA688 63.5294%, #D9A486 63.9216%, #D8A283 64.3137%, #D7A081 64.7059%, #D69F7E 65.0980%, #D69D7C 65.4902%, #D59B79 65.8824%, #D49977 66.2745%, #D39774 66.6667%, #D39572 67.0588%, #D29470 67.4510%, #D1926D 67.8431%, #D0906B 68.2353%, #CF8E68 68.6275%, #CF8C66 69.0196%, #CE8B64 69.4118%, #CD8961 69.8039%, #CC875F 70.1961%, #CC855D 70.5882%, #CB835A 70.9804%, #CA8258 71.3725%, #C98056 71.7647%, #C97E53 72.1569%, #C87C51 72.5490%, #C77B4F 72.9412%, #C6794C 73.3333%, #C6774A 73.7255%, #C57548 74.1176%, #C47445 74.5098%, #C37243 74.9020%, #C27041 75.2941%, #C26E3F 75.6863%, #C16D3C 76.0784%, #C06B3A 76.4706%, #BF6938 76.8627%, #BE6736 77.2549%, #BE6533 77.6471%, #BD6431 78.0392%, #BC622F 78.4314%, #BB602D 78.8235%, #BA5E2A 79.2157%, #B85C28 79.6078%, #B75A26 80.0000%, #B65824 80.3922%, #B55521 80.7843%, #B3531F 81.1765%, #B2511D 81.5686%, #B04F1B 81.9608%, #AF4C18 82.3529%, #AD4A16 82.7451%, #AB4814 83.1373%, #A94512 83.5294%, #A74310 83.9216%, #A5400F 84.3137%, #A33E0D 84.7059%, #A13C0B 85.0980%, #9F390A 85.4902%, #9C3709 85.8824%, #9A3508 86.2745%, #983307 86.6667%, #963107 87.0588%, #942F06 87.4510%, #912D06 87.8431%, #8F2B06 88.2353%, #8D2906 88.6275%, #8B2706 89.0196%, #892606 89.4118%, #872406 89.8039%, #852206 90.1961%, #832106 90.5882%, #811F06 90.9804%, #7F1E06 91.3725%, #7E1D06 91.7647%, #7C1B06 92.1569%, #7A1A06 92.5490%, #781806 92.9412%, #761706 93.3333%, #741506 93.7255%, #731406 94.1176%, #711307 94.5098%, #6F1107 94.9020%, #6D1007 95.2941%, #6C0E07 95.6863%, #6A0D07 96.0784%, #680C07 96.4706%, #670A07 96.8627%, #650907 97.2549%, #630707 97.6471%, #620607 98.0392%, #600408 98.4314%, #5E0308 98.8235%, #5D0208 99.2157%, #5B0108 99.6078%, #590008 100.0000%)';
+
+  const ticks = document.createElement('div');
+  ticks.style.cssText = 'display:flex;justify-content:space-between;font:11px Arial,sans-serif;color:#222;font-variant-numeric:tabular-nums;';
+  ['−0.003175', '0', '+0.003175'].forEach(function(value) {
+    const tick = document.createElement('span');
+    tick.textContent = value;
+    ticks.appendChild(tick);
+  });
+
+  const note = document.createElement('small');
+  note.style.cssText = 'display:block;margin-top:9px;line-height:1.45;';
+  note.innerHTML = `<div><strong>Blue:</strong> Lower MCI · <strong>Red:</strong> Higher MCI · <strong>Neutral:</strong> Near baseline.</div>
+    <div>Sentinel-2 ΔMCI, September 2026, compared with the 2019–2023 September baseline.</div>
+    <div><strong>Research indicator only.</strong> These colours do not confirm harmful algal blooms, toxicity, or water safety.</div>
+    <div>Official updates: <a href="https://www.algalbloom.sa.gov.au" target="_blank" rel="noopener noreferrer"><strong>www.algalbloom.sa.gov.au</strong></a></div>`;
+
+  content.append(title, bar, ticks, note);
+  div.append(toggle, content);
+  return div;
+};
+legend.addTo(map);
+
+const status = document.getElementById('status');
+const statusText = document.getElementById('statusText');
+const retryButton = document.getElementById('retry');
+
+// Track actual tile lifecycle; do not count aborted/unloaded old-view tiles as failures.
+// Counts describe retained WMS tile elements, not HTTP status codes.
+const tileStates = new Map();
+function updateStatus() {
+  retryButton.hidden = true;
+  if (!map.hasLayer(raster)) {
+    status.hidden = true;
+    return;
+  }
+  let pending = 0, succeeded = 0, failed = 0;
+  for (const state of tileStates.values()) {
+    if (state === 'pending') pending++;
+    else if (state === 'success') succeeded++;
+    else if (state === 'failed') failed++;
+  }
+  status.className = '';
+  status.hidden = false;
+  if (pending > 0) {
+    statusText.textContent = `Loading ΔMCI: ${succeeded} received, ${pending} pending` +
+      (failed ? `, ${failed} failed.` : '…');
+  } else if (failed > 0) {
+    status.className = 'error';
+    statusText.textContent = `ΔMCI partially loaded: ${succeeded} received, ${failed} tile(s) failed. ` +
+      'An image error does not identify the HTTP error code.';
+    retryButton.hidden = false;
+  } else if (succeeded > 0) {
+    status.hidden = true; // Successful full view: no permanent error banner.
+  } else {
+    statusText.textContent = 'Connecting to September 2026 ΔMCI WMS…';
+  }
+}
+
+raster.on('tileloadstart', function(event) {
+  tileStates.set(event.tile, 'pending');
+  updateStatus();
+});
+raster.on('tileload', function(event) {
+  tileStates.set(event.tile, 'success');
+  updateStatus();
+});
+raster.on('tileerror', function(event) {
+  tileStates.set(event.tile, 'failed');
+  // An HTML image error does not expose the HTTP response/status (e.g. 504).
+  console.warn('ΔMCI WMS tile failed:', event.tile.currentSrc || event.tile.src);
+  updateStatus();
+});
+raster.on('tileabort tileunload', function(event) {
+  tileStates.delete(event.tile);
+  updateStatus();
+});
+raster.on('load', updateStatus);
+raster.on('remove', function() { tileStates.clear(); updateStatus(); });
+raster.on('add', updateStatus);
+
+// User-initiated retry only, AFTER a failed view settles. Leaflet redraw()
+// requests the current visible tiles anew (not exclusively failed tiles).
+// Avoid automatic retry loops that would multiply load on the small VPS.
+retryButton.addEventListener('click', function() {
+  if (!map.hasLayer(raster) || retryButton.hidden) return;
+  retryButton.hidden = true;
+  tileStates.clear();
+  status.className = '';
+  status.hidden = false;
+  statusText.textContent = 'Retrying ΔMCI for the current view…';
+  raster.redraw();
+});
+
+raster.addTo(map);
+</script>
+</body>
+</html>
