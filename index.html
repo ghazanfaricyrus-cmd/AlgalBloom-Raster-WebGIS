@@ -13,23 +13,43 @@
     box-shadow: 0 1px 10px #0004; font: 13px/1.5 Arial,sans-serif; max-width: 270px; }
   .info img { display:block; max-width:245px; max-height:230px; margin: 7px 0; }
   .info small { color:#444; }
-  #status { position:absolute; top:12px; left:50%; transform:translateX(-50%);
-    z-index:1001; background:rgba(255,255,255,.97); color:#333;
-    font:13px/1.4 Arial,sans-serif; padding:9px 13px; border-radius:6px;
-    box-shadow:0 1px 8px #0004; max-width:calc(100% - 100px);
-    text-align:center; }
-  #status.error { color:#a00; border:1px solid #d88; }
-  #status button { margin-left:9px; padding:3px 8px; cursor:pointer; }
-  #status[hidden], #retry[hidden] { display:none !important; }
+  /* Optional WFS usage note; never obscure the map with failure banners. */
+  #waterStatus { position:absolute; z-index:1000; top:92px; left:10px;
+    max-width:min(295px, calc(100vw - 75px)); box-sizing:border-box;
+    background:rgba(255,255,255,.97); border-left:3px solid #008b80;
+    border-radius:5px; padding:8px 10px; box-shadow:0 1px 8px #0003;
+    font:12px/1.45 Arial,sans-serif; color:#243b40; }
+  #waterStatus[hidden] { display:none !important; }
+  /* Compact raster-loading guidance. Informational only; never blocks map controls. */
+  #rasterLoading { position:absolute; z-index:1000; top:14px; left:50%;
+    transform:translateX(-50%); box-sizing:border-box;
+    width:max-content; max-width:min(360px, calc(100vw - 112px));
+    display:flex; align-items:center; gap:10px; pointer-events:none;
+    background:rgba(255,255,255,.96); color:#233845;
+    border:1px solid rgba(43,84,105,.15); border-radius:10px;
+    padding:9px 13px; box-shadow:0 3px 16px rgba(0,0,0,.16);
+    font:12px/1.4 Arial,sans-serif; }
+  #rasterLoading[hidden] { display:none !important; }
+  #rasterLoading .loading-spinner { flex:none; width:15px; height:15px;
+    border:2px solid #d2e3e9; border-top-color:#18768a; border-radius:50%;
+    animation:raster-spin 1s linear infinite; }
+  #rasterLoading strong { display:block; font-size:13px; font-weight:600; margin-bottom:2px; }
+  #rasterLoading span { display:block; color:#526775; }
+  @keyframes raster-spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce) {
+    #rasterLoading .loading-spinner { animation:none; }
+  }
+  .leaflet-control-layers { font:13px/1.4 Arial,sans-serif; }
+  .leaflet-control-layers-expanded { max-width:min(310px, calc(100vw - 30px));
+    max-height: min(65vh, 420px); overflow-y:auto; }
   /* Responsive interface controls only: preserve raster rendering and WMS logic. */
   @media (max-width: 900px) {
     /* Keep the scale bar above the (potentially multi-line) attribution text. */
     .leaflet-bottom.leaflet-left { bottom: var(--mobile-attribution-height, 44px); }
     .leaflet-control-attribution { max-width: calc(100vw - 12px); box-sizing: border-box; }
-    /* Hide loading counts on phones/tablets, but retain error and Retry visibility. */
-    #status:not(.error) { display: none !important; }
   }
   /* Mobile/tablet legend display only; no raster, WMS or map changes. */
+  .info.legend-responsive[hidden] { display: none !important; }
   .legend-toggle { display: none; }
   @media (max-width: 900px) {
     .info.legend-responsive { width: auto !important; max-width: min(300px, calc(100vw - 36px)) !important; padding: 8px 10px; box-sizing: border-box; }
@@ -43,33 +63,67 @@
 </head>
 <body>
 <div id="map"></div>
-<div id="status" role="status" aria-live="polite">
-  <span id="statusText">Connecting to September 2026 ΔMCI WMS…</span>
-  <button id="retry" type="button" hidden>Retry this view</button>
+<div id="waterStatus" role="status" aria-live="polite" hidden></div>
+<div id="rasterLoading" role="status" aria-live="polite" hidden>
+  <div class="loading-spinner" aria-hidden="true"></div>
+  <div><strong>Loading ΔMCI map layer</strong>
+    <span>This detailed raster may take 10 seconds or longer to fully appear.</span></div>
 </div>
 <script>
 'use strict';
 /*
-  Portfolio presentation of the September 2026 Delta MCI WebGIS viewer.
-  Leaflet: https://leafletjs.com/reference.html
-  GeoServer WMS: https://docs.geoserver.org/latest/en/user/services/wms/reference/
-  The publicly accessible WMS is an external runtime dependency.
+  CLIENT-SIDE TEST COPY ONLY. No server, raster, SLD, or spatial-grid changes.
+  Leaflet 1.9.4 reference: https://leafletjs.com/reference.html
+  GeoServer WMS reference: https://docs.geoserver.org/latest/en/user/services/wms/reference/
+
+  Retained from the original: public WMS URL, layer, scientific vik style,
+  WMS 1.1.1, 256px image tiles, PNG transparency, opacity 1, map EPSG:3857,
+  initial fitBounds, Esri basemap and legend GetLegendGraphic request.
+  Only client-side scheduling, movement behavior and diagnostics are changed.
 */
 const WMS_URL = 'https://map.gistrategix.com.au/algalbloom/wms';
 const RASTER_LAYER = 'algalbloom:DeltaMCI_Sep_2026_WebGIS_Compressed';
 const RASTER_STYLE = 'deltamci_vik_2026';
+// Public, read-only HTTPS endpoint, resolved on the *same origin* as this page.
+// Requests return only polygons intersecting the visible map.
+const WFS_URL = '/algalbloom/wfs'; // Same-origin when served by map.gistrategix.com.au
+const WATER_FEATURE_TYPE = 'algalbloom:dea_water_valid_polygons_20m';
+// Generalised, lightweight overview is displayed at all scales; the exact 20 m
+// WFS polygons are requested only for sufficiently close viewport extents.
+const WATER_DETAIL_ZOOM = 9;
+const WATER_OVERVIEW_URL = '/projects/algalbloom/stable_water_overview.geojson';
+// Under the GeoServer layer's 1000-feature per-request limit. If hit, show
+// a warning rather than silently depicting an incomplete water mask.
+const WATER_MAX_FEATURES = 800;
 
-// Limit concurrent requests initiated by this WMS layer in the browser.
-// This does not configure or limit GeoServer itself.
+// Conservative limit for this standalone diagnostic page (one-vCPU server).
+// It caps image requests started by THIS WMS layer, not GeoServer-wide load.
+// Fewer concurrent requests may improve reliability but may extend total load time.
 const MAX_CONCURRENT_WMS = 3;
 
 const map = L.map('map'); // Leaflet 1.9.4 default EPSG:3857, unchanged.
 map.fitBounds([[-36.3, 136.0], [-32.0, 139.9]]);
+// Keep blue valid-water polygons BELOW the scientific ΔMCI raster, so MCI
+// colours remain faithful. The underlying satellite or street map stays below.
+map.createPane('waterPane');
+map.getPane('waterPane').style.zIndex = '230';
+map.createPane('analysisRasterPane');
+map.getPane('analysisRasterPane').style.zIndex = '250';
+// Raster images are noninteractive; clicks pass through to water polygons.
+map.getPane('analysisRasterPane').style.pointerEvents = 'none';
 
 const satellite = L.tileLayer(
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   { attribution: 'Tiles &copy; Esri and its data providers', maxZoom: 19 }
 ).addTo(map);
+
+// Esri Streets: conventional map, instead of OSM's volunteer tile servers.
+// The OSM tile service blocks requests launched from file:// pages.
+// This raster Esri Streets service is legacy; review migration before 2029.
+const streets = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+  { attribution: 'Tiles &copy; Esri and its data providers', maxZoom: 19 }
+);
 
 // Leaflet has no documented per-WMS-layer concurrency option in 1.9.4.
 // Queue only this WMS layer's image requests; its built-in URL/grid calculation
@@ -148,6 +202,7 @@ const LimitedWMS = L.TileLayer.WMS.extend({
 });
 
 const raster = new LimitedWMS(WMS_URL, {
+  pane: 'analysisRasterPane',
   layers: RASTER_LAYER,
   styles: RASTER_STYLE,
   format: 'image/png',
@@ -161,32 +216,179 @@ const raster = new LimitedWMS(WMS_URL, {
   attribution: 'September 2026 Sentinel-2 ΔMCI · 2019–2023 September baseline'
 });
 
-L.control.scale({position:'bottomleft',metric:true,imperial:false}).addTo(map);
-const compactScreen = window.matchMedia('(max-width: 900px)');
-const layerControl = L.control.layers({'Esri Satellite':satellite}, {'September 2026 ΔMCI (vik)':raster},
-  {position:'topright',collapsed:compactScreen.matches}).addTo(map);
+// Full-blue coverage within the validated mask. The overlay pane sits BELOW
+// the WMS: enabling stable water never paints over scientific ΔMCI colours.
+const waterStyle = { pane:'waterPane', color:'#00d5ed', weight:1.15,
+  opacity:0.92, fillColor:'#176e9c', fillOpacity:0.82 };
+function bindWaterPopup(feature, layer, overview=false) {
+  const popup = document.createElement('div');
+  const name = document.createElement('strong');
+  name.textContent = 'Sentinel-2 Stable Water Mask (2019–2023)';
+  const desc = document.createElement('p');
+  desc.style.margin = '6px 0 0';
+  desc.textContent = overview
+    ? 'Generalised overview of the valid-water analysis domain. Detailed 20 m boundaries appear at closer scales.'
+    : 'Valid water-analysis domain (20 m). Not an algal bloom detection or a water-safety assessment.';
+  popup.append(name,desc);
+  layer.bindPopup(popup);
+}
+const waterOverview = L.geoJSON(null, {
+  pane:'waterPane', style:waterStyle,
+  onEachFeature:(feature, layer)=>bindWaterPopup(feature,layer,true)
+});
+const waterDetail = L.geoJSON(null, {
+  pane:'waterPane', style:waterStyle,
+  onEachFeature:(feature, layer)=>bindWaterPopup(feature,layer,false)
+});
+// Registered in the toggle control; OFF initially, like the previous test.
+const waterPolygons = L.layerGroup([waterOverview]);
 
-// On touch screens, Leaflet's default toggle opens the layer list but does not
-// always close it when tapped a second time. Make the same icon a true toggle.
-const layerToggle = layerControl.getContainer().querySelector('.leaflet-control-layers-toggle');
+L.control.scale({position:'bottomleft',metric:true,imperial:false}).addTo(map);
+const layerControl = L.control.layers(
+  {'Esri Satellite':satellite, 'Esri Streets (non-satellite)':streets},
+  {'September 2026 ΔMCI (vik)':raster,
+   'Sentinel-2 Stable Water Mask (2019–2023)':waterPolygons},
+  {position:'topright',collapsed:true}
+).addTo(map);
+
+// Closed by default on ALL screens. Click the layers icon to toggle it;
+// do not automatically reveal the panel just by hovering on desktop.
+const layersContainer = layerControl.getContainer();
+L.DomEvent.off(layersContainer, 'mouseenter', layerControl._expandSafely, layerControl);
+const layerToggle = layersContainer.querySelector('.leaflet-control-layers-toggle');
 if (layerToggle) {
+  layerToggle.setAttribute('aria-label','Show or hide map layers');
+  layerToggle.setAttribute('aria-expanded','false');
   layerToggle.addEventListener('click', function(event) {
-    if (!compactScreen.matches) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (layerControl.getContainer().classList.contains('leaflet-control-layers-expanded')) {
-      layerControl.collapse();
-    } else {
-      layerControl.expand();
-    }
+    const expanded = layersContainer.classList.contains('leaflet-control-layers-expanded');
+    if (expanded) layerControl.collapse(); else layerControl.expand();
+    layerToggle.setAttribute('aria-expanded',String(!expanded));
   }, true);
 }
-// Close the expanded list by tapping anywhere outside it, including other controls.
 document.addEventListener('pointerdown', function(event) {
-  if (compactScreen.matches && !layerControl.getContainer().contains(event.target)) {
+  if (!layersContainer.contains(event.target)) {
     layerControl.collapse();
+    if (layerToggle) layerToggle.setAttribute('aria-expanded','false');
   }
-}, {passive: true});
+}, {passive:true});
+
+const waterStatus = document.getElementById('waterStatus');
+let waterAbort = null;
+let waterRequestVersion = 0;
+let waterDebounce = null;
+let overviewLoaded = false;
+let overviewPromise = null;
+function showWaterStatus(message) {
+  waterStatus.textContent = message;
+  waterStatus.hidden = !message;
+}
+function showGeneralisedOverview() {
+  waterPolygons.removeLayer(waterDetail);
+  if (!waterPolygons.hasLayer(waterOverview)) waterPolygons.addLayer(waterOverview);
+}
+async function loadWaterOverview() {
+  if (overviewLoaded) return true;
+  if (overviewPromise) return overviewPromise;
+  overviewPromise = (async () => {
+    try {
+      const response = await fetch(WATER_OVERVIEW_URL, {credentials:'omit'});
+      if (!response.ok) throw new Error('Overview HTTP '+response.status);
+      const data = await response.json();
+      if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) {
+        throw new Error('Invalid water overview format');
+      }
+      waterOverview.clearLayers();
+      waterOverview.addData(data);
+      overviewLoaded = true;
+      return true;
+    } catch (error) {
+      console.warn('Generalised water overview unavailable:', error);
+      return false;
+    } finally { overviewPromise = null; }
+  })();
+  return overviewPromise;
+}
+function cancelWaterRequest() {
+  waterRequestVersion++;
+  if (waterAbort) { waterAbort.abort(); waterAbort = null; }
+  if (waterDebounce !== null) { clearTimeout(waterDebounce); waterDebounce = null; }
+}
+async function scheduleVisibleWater() {
+  cancelWaterRequest();
+  if (!map.hasLayer(waterPolygons)) {
+    showWaterStatus('');
+    return;
+  }
+  if (location.protocol === 'file:') {
+    showWaterStatus('The water layer is available on the hosted WebGIS test page.');
+    return;
+  }
+  const version = waterRequestVersion;
+  showGeneralisedOverview();
+  if (!overviewLoaded) showWaterStatus('Loading water mask…');
+  const overviewReady = await loadWaterOverview();
+  if (!map.hasLayer(waterPolygons) || version !== waterRequestVersion) return;
+  if (map.getZoom() < WATER_DETAIL_ZOOM) {
+    showWaterStatus(overviewReady ? '' : 'Water overview unavailable.');
+    return;
+  }
+  if (!overviewReady) showWaterStatus('Loading detailed water boundaries…');
+  // Debounce high-resolution WFS when moving/zooming. The lightweight overview
+  // remains visible underneath until the detail request completes.
+  waterDebounce = setTimeout(() => fetchVisibleWater(version), 350);
+}
+async function fetchVisibleWater(version) {
+  waterDebounce = null;
+  if (version !== waterRequestVersion || !map.hasLayer(waterPolygons)) return;
+  const b = map.getBounds();
+  const bbox = [b.getWest(),b.getSouth(),b.getEast(),b.getNorth()]
+    .map(v=>v.toFixed(7)).join(',') + ',EPSG:4326';
+  const params = new URLSearchParams({
+    service:'WFS', version:'1.0.0', request:'GetFeature',
+    typeName:WATER_FEATURE_TYPE, outputFormat:'application/json',
+    srsName:'EPSG:4326', bbox, maxFeatures:String(WATER_MAX_FEATURES)
+  });
+  const controller = new AbortController();
+  waterAbort = controller;
+  try {
+    const response = await fetch(WFS_URL + '?' + params.toString(),
+      {method:'GET',signal:controller.signal,credentials:'omit'});
+    if (!response.ok) throw new Error('HTTP '+response.status);
+    const data = await response.json();
+    if (version !== waterRequestVersion || !map.hasLayer(waterPolygons)) return;
+    if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) {
+      throw new Error('Unexpected WFS response');
+    }
+    if (data.features.length >= WATER_MAX_FEATURES) {
+      // Never replace the complete overview with an arbitrarily truncated
+      // WFS subset. The user still sees water, with fidelity limited by scale.
+      showWaterStatus('Generalised water overview shown; zoom closer for 20 m detail.');
+      return;
+    }
+    waterDetail.clearLayers();
+    waterDetail.addData(data);
+    waterPolygons.addLayer(waterDetail);
+    waterPolygons.removeLayer(waterOverview);
+    showWaterStatus('');
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    if (version !== waterRequestVersion) return;
+    console.warn('Stable-water WFS request failed:', error);
+    // Keep overview visible; never expose technical stack traces to visitors.
+    showWaterStatus('');
+  } finally {
+    if (waterAbort === controller) waterAbort = null;
+  }
+}
+map.on('moveend', scheduleVisibleWater);
+map.on('overlayadd', event => {
+  if (event.layer === waterPolygons) scheduleVisibleWater();
+});
+map.on('overlayremove', event => {
+  if (event.layer === waterPolygons) scheduleVisibleWater();
+});
 
 // The attribution can wrap to two or more lines on phones. Measure its actual
 // height so the scale bar is never hidden behind its text; keep desktop intact.
@@ -226,7 +428,7 @@ legend.onAdd = function() {
   const title = document.createElement('strong');
   title.textContent = 'September 2026 ΔMCI (vik)';
 
-  // Colour stops matching the deployed deltamci_vik_2026 style.
+  // Exact 256 colour stops from the existing deltamci_vik_2026 SLD.
   // Legend only: the GeoServer WMS rendering and scientific values are unchanged.
   const bar = document.createElement('div');
   bar.setAttribute('role','img');
@@ -247,83 +449,35 @@ legend.onAdd = function() {
   note.innerHTML = `<div><strong>Blue:</strong> Lower MCI · <strong>Red:</strong> Higher MCI · <strong>Neutral:</strong> Near baseline.</div>
     <div>Sentinel-2 ΔMCI, September 2026, compared with the 2019–2023 September baseline.</div>
     <div><strong>Research indicator only.</strong> These colours do not confirm harmful algal blooms, toxicity, or water safety.</div>
-    <div>Official updates: <a href="https://www.algalbloom.sa.gov.au" target="_blank" rel="noopener noreferrer"><strong>www.algalbloom.sa.gov.au</strong></a></div>`;
+    <div>Official updates: <a href="http://www.algalbloom.sa.gov.au" target="_blank" rel="noopener noreferrer"><strong>www.algalbloom.sa.gov.au</strong></a></div>`;
 
   content.append(title, bar, ticks, note);
   div.append(toggle, content);
   return div;
 };
 legend.addTo(map);
-
-const status = document.getElementById('status');
-const statusText = document.getElementById('statusText');
-const retryButton = document.getElementById('retry');
-
-// Track actual tile lifecycle; do not count aborted/unloaded old-view tiles as failures.
-// Counts describe retained WMS tile elements, not HTTP status codes.
-const tileStates = new Map();
-function updateStatus() {
-  retryButton.hidden = true;
-  if (!map.hasLayer(raster)) {
-    status.hidden = true;
-    return;
-  }
-  let pending = 0, succeeded = 0, failed = 0;
-  for (const state of tileStates.values()) {
-    if (state === 'pending') pending++;
-    else if (state === 'success') succeeded++;
-    else if (state === 'failed') failed++;
-  }
-  status.className = '';
-  status.hidden = false;
-  if (pending > 0) {
-    statusText.textContent = `Loading ΔMCI: ${succeeded} received, ${pending} pending` +
-      (failed ? `, ${failed} failed.` : '…');
-  } else if (failed > 0) {
-    status.className = 'error';
-    statusText.textContent = `ΔMCI partially loaded: ${succeeded} received, ${failed} tile(s) failed. ` +
-      'An image error does not identify the HTTP error code.';
-    retryButton.hidden = false;
-  } else if (succeeded > 0) {
-    status.hidden = true; // Successful full view: no permanent error banner.
-  } else {
-    statusText.textContent = 'Connecting to September 2026 ΔMCI WMS…';
-  }
+// This colour scale explains ΔMCI, so show it whenever the ΔMCI raster
+// is enabled. Stable-water polygons may be enabled at the same time.
+const rasterLegendElement = legend.getContainer();
+function updateRasterLegendVisibility() {
+  rasterLegendElement.hidden = !map.hasLayer(raster);
 }
+map.on('layeradd layerremove', function(event) {
+  if (event.layer === raster) updateRasterLegendVisibility();
+});
+updateRasterLegendVisibility();
 
-raster.on('tileloadstart', function(event) {
-  tileStates.set(event.tile, 'pending');
-  updateStatus();
-});
-raster.on('tileload', function(event) {
-  tileStates.set(event.tile, 'success');
-  updateStatus();
-});
+// Explain the delay only while Leaflet is loading the WMS tile batch.
+// No artificial ten-second wait: dismiss as soon as the current view settles.
+// A loading failure is not presented as a successful render.
+const rasterLoading = document.getElementById('rasterLoading');
+raster.on('loading', function() { rasterLoading.hidden = false; });
+raster.on('load remove', function() { rasterLoading.hidden = true; });
+
+// Keep diagnostic details in the developer console, not on the public map.
+// Neither the WMS request parameters nor its raster rendering are changed.
 raster.on('tileerror', function(event) {
-  tileStates.set(event.tile, 'failed');
-  // An HTML image error does not expose the HTTP response/status (e.g. 504).
-  console.warn('ΔMCI WMS tile failed:', event.tile.currentSrc || event.tile.src);
-  updateStatus();
-});
-raster.on('tileabort tileunload', function(event) {
-  tileStates.delete(event.tile);
-  updateStatus();
-});
-raster.on('load', updateStatus);
-raster.on('remove', function() { tileStates.clear(); updateStatus(); });
-raster.on('add', updateStatus);
-
-// User-initiated retry only, AFTER a failed view settles. Leaflet redraw()
-// requests the current visible tiles anew (not exclusively failed tiles).
-// Avoid automatic retry loops that would multiply load on the small VPS.
-retryButton.addEventListener('click', function() {
-  if (!map.hasLayer(raster) || retryButton.hidden) return;
-  retryButton.hidden = true;
-  tileStates.clear();
-  status.className = '';
-  status.hidden = false;
-  statusText.textContent = 'Retrying ΔMCI for the current view…';
-  raster.redraw();
+  console.warn('ΔMCI WMS tile could not load:', event.tile.currentSrc || event.tile.src);
 });
 
 raster.addTo(map);
