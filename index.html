@@ -39,6 +39,45 @@
   @media (prefers-reduced-motion:reduce) {
     #rasterLoading .loading-spinner { animation:none; }
   }
+  /* Three scientific labels remain aligned below the colour ramp.
+     Compact phones display the three aligned columns with two deliberate
+     lines per label, rather than clipping or wrapping unpredictably. */
+  .legend-meaning-row {
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:5px;
+    margin-bottom:7px;
+    font:11px/1.35 Arial,sans-serif;
+    white-space:nowrap;
+  }
+  .legend-meaning-row > span,
+  .legend-meaning-detail { white-space:nowrap; }
+  @media (min-width:601px) and (max-width:900px) {
+    .legend-meaning-row { font-size:10px; gap:3px; }
+  }
+  @media (max-width:600px) {
+    .legend-meaning-row {
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:4px;
+      font-size:11px;
+      line-height:1.35;
+      text-align:center;
+      align-items:start;
+    }
+    .legend-meaning-row > span { display:block; min-width:0; }
+    .legend-meaning-row > span:first-child { text-align:left; }
+    .legend-meaning-row > span:last-child { text-align:right; }
+    .legend-meaning-row strong,
+    .legend-meaning-detail { display:block; }
+  }
+  @media (max-width:320px) {
+    .legend-meaning-row { gap:2px; font-size:10px; }
+  }
+  @media (max-width:260px) {
+    .legend-meaning-row { font-size:9px; }
+  }
   .leaflet-control-layers { font:13px/1.4 Arial,sans-serif; }
   .leaflet-control-layers-expanded { max-width:min(310px, calc(100vw - 30px));
     max-height: min(65vh, 420px); overflow-y:auto; }
@@ -52,12 +91,12 @@
   .info.legend-responsive[hidden] { display: none !important; }
   .legend-toggle { display: none; }
   @media (max-width: 900px) {
-    .info.legend-responsive { width: auto !important; max-width: min(300px, calc(100vw - 36px)) !important; padding: 8px 10px; box-sizing: border-box; }
+    .info.legend-responsive { width: auto !important; max-width: min(340px, calc(100vw - 36px)) !important; padding: 8px 10px; box-sizing: border-box; }
     .legend-toggle { display: block; width: 100%; border: 0; background: transparent; text-align: left;
       padding: 3px 5px; cursor: pointer; color: #222; font: bold 14px/1.5 Arial,sans-serif; }
     .legend-content { display: none; }
     .legend-responsive.legend-open .legend-content { display: block; max-height: min(48vh, 350px); overflow-y: auto;
-      overflow-x: hidden; overscroll-behavior: contain; margin-top: 6px; width: min(268px, calc(100vw - 58px)); }
+      overflow-x: hidden; overscroll-behavior: contain; margin-top: 6px; width: min(308px, calc(100vw - 58px)); }
   }
 </style>
 </head>
@@ -223,7 +262,7 @@ const waterStyle = { pane:'waterPane', color:'#00d5ed', weight:1.15,
 function bindWaterPopup(feature, layer, overview=false) {
   const popup = document.createElement('div');
   const name = document.createElement('strong');
-  name.textContent = 'Sentinel-2 Stable Water Mask (2019–2023)';
+  name.textContent = 'DEA 2021 Water Analysis Domain (Manual Additions)';
   const desc = document.createElement('p');
   desc.style.margin = '6px 0 0';
   desc.textContent = overview
@@ -247,7 +286,7 @@ L.control.scale({position:'bottomleft',metric:true,imperial:false}).addTo(map);
 const layerControl = L.control.layers(
   {'Esri Satellite':satellite, 'Esri Streets (non-satellite)':streets},
   {'September 2026 ΔMCI (vik)':raster,
-   'Sentinel-2 Stable Water Mask (2019–2023)':waterPolygons},
+   'DEA 2021 Water Analysis Domain (Manual Additions)':waterPolygons},
   {position:'topright',collapsed:true}
 ).addTo(map);
 
@@ -406,8 +445,8 @@ placeScaleAboveAttribution();
 const legend = L.control({ position:'bottomright' });
 legend.onAdd = function() {
   const div = L.DomUtil.create('div','info legend-responsive');
-  div.style.width = '268px';
-  div.style.maxWidth = 'calc(100vw - 35px)';
+  div.style.width = '355px';
+  div.style.maxWidth = 'min(355px, calc(100vw - 35px))';
   div.style.boxSizing = 'border-box';
 
   const toggle = document.createElement('button');
@@ -426,6 +465,7 @@ legend.onAdd = function() {
   content.className = 'legend-content';
 
   const title = document.createElement('strong');
+  title.style.cssText = 'display:block;font-size:14px;line-height:1.4;';
   title.textContent = 'September 2026 ΔMCI (vik)';
 
   // Exact 256 colour stops from the existing deltamci_vik_2026 SLD.
@@ -433,11 +473,11 @@ legend.onAdd = function() {
   const bar = document.createElement('div');
   bar.setAttribute('role','img');
   bar.setAttribute('aria-label','ΔMCI vik colour scale: blue negative, neutral zero, red positive');
-  bar.style.cssText = 'height:20px;width:100%;border:1px solid #777;border-radius:3px;box-sizing:border-box;margin:10px 0 5px;';
+  bar.style.cssText = 'height:22px;width:100%;border:1px solid #777;border-radius:3px;box-sizing:border-box;margin:10px 0 6px;';
   bar.style.background = 'linear-gradient(to right, #001261 0.0000%, #011462 0.3922%, #011563 0.7843%, #011764 1.1765%, #011865 1.5686%, #011A66 1.9608%, #021C67 2.3529%, #021D68 2.7451%, #021F69 3.1373%, #02206A 3.5294%, #02226B 3.9216%, #02236C 4.3137%, #02256D 4.7059%, #02276E 5.0980%, #02286F 5.4902%, #022A70 5.8824%, #022B71 6.2745%, #022D72 6.6667%, #022E73 7.0588%, #023074 7.4510%, #023175 7.8431%, #023376 8.2353%, #023477 8.6275%, #023678 9.0196%, #023779 9.4118%, #02397A 9.8039%, #023A7B 10.1961%, #033C7C 10.5882%, #033E7D 10.9804%, #033F7E 11.3725%, #03417F 11.7647%, #034280 12.1569%, #034481 12.5490%, #034582 12.9412%, #034783 13.3333%, #034984 13.7255%, #034A85 14.1176%, #044C86 14.5098%, #044D87 14.9020%, #044F88 15.2941%, #055189 15.6863%, #05528A 16.0784%, #06548B 16.4706%, #06568C 16.8627%, #07578D 17.2549%, #08598F 17.6471%, #095B90 18.0392%, #0B5D91 18.4314%, #0C5E92 18.8235%, #0E6093 19.2157%, #106294 19.6078%, #116496 20.0000%, #136697 20.3922%, #156798 20.7843%, #176999 21.1765%, #196B9A 21.5686%, #1C6D9C 21.9608%, #1E6F9D 22.3529%, #20719E 22.7451%, #2373A0 23.1373%, #2575A1 23.5294%, #2877A2 23.9216%, #2B79A4 24.3137%, #2D7BA5 24.7059%, #307DA6 25.0980%, #337FA8 25.4902%, #3681A9 25.8824%, #3983AB 26.2745%, #3C85AC 26.6667%, #3F87AD 27.0588%, #4289AF 27.4510%, #458BB0 27.8431%, #488DB2 28.2353%, #4B90B3 28.6275%, #4E92B4 29.0196%, #5194B6 29.4118%, #5496B7 29.8039%, #5798B9 30.1961%, #5A9ABA 30.5882%, #5D9CBB 30.9804%, #619EBD 31.3725%, #64A0BE 31.7647%, #67A2C0 32.1569%, #6AA4C1 32.5490%, #6DA6C2 32.9412%, #71A8C4 33.3333%, #74AAC5 33.7255%, #77ACC6 34.1176%, #7AAEC8 34.5098%, #7DB0C9 34.9020%, #80B2CA 35.2941%, #84B4CC 35.6863%, #87B6CD 36.0784%, #8AB8CE 36.4706%, #8DBAD0 36.8627%, #90BCD1 37.2549%, #94BED2 37.6471%, #97C0D4 38.0392%, #9AC2D5 38.4314%, #9DC4D6 38.8235%, #A0C5D8 39.2157%, #A3C7D9 39.6078%, #A7C9DA 40.0000%, #AACBDC 40.3922%, #ADCDDD 40.7843%, #B0CFDE 41.1765%, #B3D1DF 41.5686%, #B6D3E1 41.9608%, #BAD5E2 42.3529%, #BDD6E3 42.7451%, #C0D8E4 43.1373%, #C3DAE5 43.5294%, #C6DBE6 43.9216%, #C9DDE7 44.3137%, #CCDFE8 44.7059%, #CFE0E8 45.0980%, #D2E1E9 45.4902%, #D5E3E9 45.8824%, #D8E4E9 46.2745%, #DBE5E9 46.6667%, #DEE6E9 47.0588%, #E0E6E9 47.4510%, #E2E7E8 47.8431%, #E5E7E8 48.2353%, #E7E7E7 48.6275%, #E8E7E5 49.0196%, #EAE6E4 49.4118%, #EBE6E2 49.8039%, #ECE5E0 50.1961%, #EDE4DE 50.5882%, #EEE3DC 50.9804%, #EEE1DA 51.3725%, #EEE0D8 51.7647%, #EEDED5 52.1569%, #EEDDD3 52.5490%, #EEDBD0 52.9412%, #EED9CD 53.3333%, #EDD7CB 53.7255%, #EDD5C8 54.1176%, #ECD3C5 54.5098%, #ECD1C3 54.9020%, #EBD0C0 55.2941%, #EACEBD 55.6863%, #E9CCBA 56.0784%, #E9CAB8 56.4706%, #E8C8B5 56.8627%, #E7C6B2 57.2549%, #E6C4B0 57.6471%, #E5C1AD 58.0392%, #E4BFAA 58.4314%, #E4BEA8 58.8235%, #E3BCA5 59.2157%, #E2BAA2 59.6078%, #E1B8A0 60.0000%, #E0B69D 60.3922%, #DFB49A 60.7843%, #DFB298 61.1765%, #DEB095 61.5686%, #DDAE93 61.9608%, #DCAC90 62.3529%, #DBAA8D 62.7451%, #DBA88B 63.1373%, #DAA688 63.5294%, #D9A486 63.9216%, #D8A283 64.3137%, #D7A081 64.7059%, #D69F7E 65.0980%, #D69D7C 65.4902%, #D59B79 65.8824%, #D49977 66.2745%, #D39774 66.6667%, #D39572 67.0588%, #D29470 67.4510%, #D1926D 67.8431%, #D0906B 68.2353%, #CF8E68 68.6275%, #CF8C66 69.0196%, #CE8B64 69.4118%, #CD8961 69.8039%, #CC875F 70.1961%, #CC855D 70.5882%, #CB835A 70.9804%, #CA8258 71.3725%, #C98056 71.7647%, #C97E53 72.1569%, #C87C51 72.5490%, #C77B4F 72.9412%, #C6794C 73.3333%, #C6774A 73.7255%, #C57548 74.1176%, #C47445 74.5098%, #C37243 74.9020%, #C27041 75.2941%, #C26E3F 75.6863%, #C16D3C 76.0784%, #C06B3A 76.4706%, #BF6938 76.8627%, #BE6736 77.2549%, #BE6533 77.6471%, #BD6431 78.0392%, #BC622F 78.4314%, #BB602D 78.8235%, #BA5E2A 79.2157%, #B85C28 79.6078%, #B75A26 80.0000%, #B65824 80.3922%, #B55521 80.7843%, #B3531F 81.1765%, #B2511D 81.5686%, #B04F1B 81.9608%, #AF4C18 82.3529%, #AD4A16 82.7451%, #AB4814 83.1373%, #A94512 83.5294%, #A74310 83.9216%, #A5400F 84.3137%, #A33E0D 84.7059%, #A13C0B 85.0980%, #9F390A 85.4902%, #9C3709 85.8824%, #9A3508 86.2745%, #983307 86.6667%, #963107 87.0588%, #942F06 87.4510%, #912D06 87.8431%, #8F2B06 88.2353%, #8D2906 88.6275%, #8B2706 89.0196%, #892606 89.4118%, #872406 89.8039%, #852206 90.1961%, #832106 90.5882%, #811F06 90.9804%, #7F1E06 91.3725%, #7E1D06 91.7647%, #7C1B06 92.1569%, #7A1A06 92.5490%, #781806 92.9412%, #761706 93.3333%, #741506 93.7255%, #731406 94.1176%, #711307 94.5098%, #6F1107 94.9020%, #6D1007 95.2941%, #6C0E07 95.6863%, #6A0D07 96.0784%, #680C07 96.4706%, #670A07 96.8627%, #650907 97.2549%, #630707 97.6471%, #620607 98.0392%, #600408 98.4314%, #5E0308 98.8235%, #5D0208 99.2157%, #5B0108 99.6078%, #590008 100.0000%)';
 
   const ticks = document.createElement('div');
-  ticks.style.cssText = 'display:flex;justify-content:space-between;font:11px Arial,sans-serif;color:#222;font-variant-numeric:tabular-nums;';
+  ticks.style.cssText = 'display:flex;justify-content:space-between;font:12px Arial,sans-serif;color:#222;font-variant-numeric:tabular-nums;';
   ['−0.003175', '0', '+0.003175'].forEach(function(value) {
     const tick = document.createElement('span');
     tick.textContent = value;
@@ -445,8 +485,8 @@ legend.onAdd = function() {
   });
 
   const note = document.createElement('small');
-  note.style.cssText = 'display:block;margin-top:9px;line-height:1.45;';
-  note.innerHTML = `<div><strong>Blue:</strong> Lower MCI · <strong>Red:</strong> Higher MCI · <strong>Neutral:</strong> Near baseline.</div>
+  note.style.cssText = 'display:block;margin-top:10px;line-height:1.5;font-size:12px;';
+  note.innerHTML = `<div class="legend-meaning-row"><span><strong>Blue:</strong> <span class="legend-meaning-detail">Lower MCI</span></span><span><strong>Neutral:</strong> <span class="legend-meaning-detail">Near baseline</span></span><span><strong>Red:</strong> <span class="legend-meaning-detail">Higher MCI</span></span></div>
     <div>Sentinel-2 ΔMCI, September 2026, compared with the 2019–2023 September baseline.</div>
     <div><strong>Research indicator only.</strong> These colours do not confirm harmful algal blooms, toxicity, or water safety.</div>
     <div>Official updates: <a href="http://www.algalbloom.sa.gov.au" target="_blank" rel="noopener noreferrer"><strong>www.algalbloom.sa.gov.au</strong></a></div>`;
